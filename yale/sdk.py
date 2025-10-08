@@ -21,6 +21,7 @@ def run_job(
     cpus_per_task: int = 2,
     time_limit: str = "10:00",
     memory: Optional[str] = None,
+    env: Optional[str] = None,
     wait: bool = False,
     config_path: Optional[str] = None,
     username: Optional[str] = None,
@@ -40,6 +41,7 @@ def run_job(
         cpus_per_task: Number of CPUs per task
         time_limit: Time limit (HH:MM:SS or HH:MM)
         memory: Memory limit (e.g., "32G")
+        env: Conda environment name (overrides config.yaml)
         wait: Whether to wait for job completion
         config_path: Path to config.yaml file
         username: Username for SSH connection
@@ -66,13 +68,23 @@ def run_job(
         ...     gpus="v100:2"
         ... )
     """
+    import uuid
+    run_id = str(uuid.uuid4())[:8]
+    logger.info(f"[RUN_JOB CALLED] run_id={run_id}, job_name={job_name}")
+    
     # Create cluster connection
     connection = ClusterConnection(config_path)
+    
+    # Override env in config if provided
+    if env:
+        connection.config['env'] = env
+    
     connection.connect(username, password)
     
     try:
         # Create job manager
         job = YaleJob(connection, job_name=job_name)
+        logger.info(f"[RUN_JOB {run_id}] Created YaleJob instance")
         
         # Prepare data if provided
         dataset_path = None
@@ -114,7 +126,9 @@ def run_job(
         connection.upload_file(local_sbatch_script, remote_sbatch_script)
         
         # Submit job
+        logger.info(f"[RUN_JOB {run_id}] About to call job.submit()")
         job.submit(remote_sbatch_script, wait=wait)
+        logger.info(f"[RUN_JOB {run_id}] job.submit() completed")
         
         return job
         
@@ -134,6 +148,7 @@ def run_ocr_job(
     gpus: str = "p100:2",
     partition: str = "gpu",
     time_limit: str = "02:00:00",
+    env: Optional[str] = None,
     wait: bool = False,
     config_path: Optional[str] = None,
     username: Optional[str] = None,
@@ -154,6 +169,7 @@ def run_ocr_job(
         gpus: GPU specification
         partition: SLURM partition (default: gpu)
         time_limit: Time limit in HH:MM:SS format (default: 02:00:00)
+        env: Conda environment name (overrides config.yaml)
         wait: Whether to wait for job completion
         config_path: Path to config.yaml file
         username: Username for SSH connection
@@ -176,16 +192,61 @@ def run_ocr_job(
         >>> status = job.get_status()
         >>> print(status)
     """
-    # Create OCR script
+    logger.info(f"[RUN_OCR_JOB CALLED] job_name={job_name}, source={data_source}")
+    
+    # Create OCR script using file:// URLs (more efficient than base64)
     ocr_script = f"""
+import os
+import tempfile
 import torch
 from datasets import load_from_disk
+from PIL import Image
 from vllm import LLM, SamplingParams
 from tqdm import tqdm
+from toolz import partition_all
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def save_image_to_temp(image, temp_dir):
+    \"\"\"Save PIL Image to temporary file and return file:// URL.\"\"\"
+    # Convert to PIL Image if needed
+    if isinstance(image, Image.Image):
+        pil_img = image
+    elif isinstance(image, dict) and "bytes" in image:
+        import io
+        pil_img = Image.open(io.BytesIO(image["bytes"]))
+    elif isinstance(image, str):
+        pil_img = Image.open(image)
+    else:
+        raise ValueError(f"Unsupported image type: {{type(image)}}")
+    
+    # Convert to RGB
+    pil_img = pil_img.convert("RGB")
+    
+    # Save to temporary file
+    temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False, dir=temp_dir)
+    pil_img.save(temp_file.name, format="PNG")
+    temp_file.close()
+    
+    # Return file:// URL
+    return f"file://{{temp_file.name}}", temp_file.name
+
+
+def make_ocr_message(image_url, prompt="Extract the text content from this image."):
+    \"\"\"Create vLLM chat message with file:// URL.\"\"\"
+    return [
+        {{
+            "role": "user",
+            "content": [
+                {{"type": "text", "text": prompt}},
+                {{"type": "image_url", "image_url": {{"url": image_url}}}},
+            ],
+        }}
+    ]
+
 
 # Load dataset
 dataset = load_from_disk("dataset")
@@ -194,13 +255,21 @@ logger.info(f"Loaded {{len(dataset)}} samples")
 # Limit samples if requested
 {f'dataset = dataset.select(range(min({max_samples}, len(dataset))))' if max_samples else ''}
 
-# Initialize vLLM model
+# Create temporary directory for image files
+temp_dir = tempfile.mkdtemp(prefix="yale_ocr_")
+logger.info(f"Created temp directory: {{temp_dir}}")
+
+# Get the parent directory of the dataset for allowed_local_media_path
+dataset_parent = os.path.dirname(os.path.abspath("dataset"))
+
+# Initialize vLLM model with allowed_local_media_path
 logger.info("Initializing model: {model}")
 llm = LLM(
     model="{model}",
     trust_remote_code=True,
     max_model_len=8192,
     gpu_memory_utilization=0.8,
+    allowed_local_media_path=dataset_parent,  # Allow loading from dataset directory
 )
 
 sampling_params = SamplingParams(
@@ -209,37 +278,64 @@ sampling_params = SamplingParams(
 )
 
 # Process images
-logger.info("Processing images...")
+logger.info(f"Processing {{len(dataset)}} images in batches of {batch_size}")
 results = []
+temp_files = []
 
-for i in tqdm(range(0, len(dataset), {batch_size})):
-    batch = dataset[i:i+{batch_size}]
-    images = batch['image']
-    
-    # Create messages for batch
-    messages = []
-    for img in images:
-        messages.append([{{
-            "role": "user",
-            "content": [
-                {{"type": "image_url", "image_url": {{"url": img}}}},
-                {{"type": "text", "text": "Extract the text content from this image."}}
-            ]
-        }}])
-    
-    # Process with vLLM
-    outputs = llm.chat(messages, sampling_params)
-    
-    for output in outputs:
-        results.append(output.outputs[0].text.strip())
+try:
+    for batch_indices in tqdm(
+        partition_all({batch_size}, range(len(dataset))),
+        total=(len(dataset) + {batch_size} - 1) // {batch_size},
+        desc="DoTS.ocr processing"
+    ):
+        batch_indices = list(batch_indices)
+        batch_images = [dataset[i]['image'] for i in batch_indices]
+        
+        try:
+            # Save images to temp files and get file:// URLs
+            batch_urls = []
+            for img in batch_images:
+                file_url, temp_path = save_image_to_temp(img, temp_dir)
+                batch_urls.append(file_url)
+                temp_files.append(temp_path)
+            
+            # Create messages for batch with file:// URLs
+            batch_messages = [make_ocr_message(url) for url in batch_urls]
+            
+            # Process with vLLM
+            outputs = llm.chat(batch_messages, sampling_params)
+            
+            # Extract outputs
+            for output in outputs:
+                results.append(output.outputs[0].text.strip())
+        
+        except Exception as e:
+            logger.error(f"Error processing batch: {{e}}")
+            # Add error placeholders for failed batch
+            results.extend(["[OCR ERROR]"] * len(batch_images))
+
+finally:
+    # Clean up temporary files
+    logger.info("Cleaning up temporary files...")
+    for temp_file in temp_files:
+        try:
+            os.unlink(temp_file)
+        except:
+            pass
+    try:
+        os.rmdir(temp_dir)
+    except:
+        pass
 
 # Add results to dataset
+logger.info("Adding markdown column to dataset")
 dataset = dataset.add_column("markdown", results)
 
 # Save results
 output_path = "{output_dataset}"
+logger.info(f"Saving to {{output_path}}")
 dataset.save_to_disk(output_path)
-logger.info(f"Results saved to {{output_path}}")
+logger.info("✅ OCR processing complete!")
 """
     
     return run_job(
@@ -250,6 +346,7 @@ logger.info(f"Results saved to {{output_path}}")
         gpus=gpus,
         partition=partition,
         time_limit=time_limit,
+        env=env,
         wait=wait,
         config_path=config_path,
         username=username,

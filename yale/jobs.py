@@ -90,7 +90,9 @@ class YaleJob:
         Returns:
             SLURM batch script as string
         """
-        output_file = output_file or f"{self.job_name}.out"
+        # Use full path for output file in job_dir
+        if output_file is None:
+            output_file = f"{self.job_dir}/{self.job_name}.out"
         
         script = f"""#!/bin/bash
 
@@ -223,7 +225,9 @@ class YaleJob:
         Returns:
             Job ID
         """
-        logger.info(f"Submitting job: {self.job_name}")
+        import traceback
+        logger.info(f"[SUBMIT CALLED] Job: {self.job_name}, Script: {script_path}")
+        logger.debug("".join(traceback.format_stack()[-5:]))  # Show call stack
         
         result = self.connection.execute_command(f"sbatch {script_path}")
         

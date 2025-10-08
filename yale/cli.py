@@ -29,6 +29,7 @@ def cmd_run(args):
         cpus_per_task=args.cpus,
         time_limit=args.time,
         memory=args.memory,
+        env=args.env,
         wait=args.wait,
         config_path=args.config,
     )
@@ -50,6 +51,7 @@ def cmd_ocr(args):
         gpus=args.gpus,
         partition=args.partition,
         time_limit=args.time,
+        env=args.env,
         wait=args.wait,
         config_path=args.config,
     )
@@ -167,6 +169,7 @@ Examples:
     run_parser.add_argument('--cpus', type=int, default=2, help='CPUs per task')
     run_parser.add_argument('--time', default='10:00', help='Time limit')
     run_parser.add_argument('--memory', help='Memory limit (e.g., 32G)')
+    run_parser.add_argument('--env', help='Conda environment name (overrides config.yaml)')
     run_parser.add_argument('--wait', action='store_true', help='Wait for completion')
     run_parser.set_defaults(func=cmd_run)
     
@@ -187,6 +190,7 @@ Examples:
     ocr_parser.add_argument('--gpus', default='p100:2', help='GPU specification')
     ocr_parser.add_argument('--partition', default='gpu', help='SLURM partition (default: gpu)')
     ocr_parser.add_argument('--time', default='02:00:00', help='Time limit (HH:MM:SS, default: 02:00:00)')
+    ocr_parser.add_argument('--env', help='Conda environment name (overrides config.yaml)')
     ocr_parser.add_argument('--wait', action='store_true', help='Wait for completion')
     ocr_parser.set_defaults(func=cmd_ocr)
     
