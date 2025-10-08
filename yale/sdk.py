@@ -149,6 +149,10 @@ def run_ocr_job(
     partition: str = "gpu",
     time_limit: str = "02:00:00",
     env: Optional[str] = None,
+    prompt_mode: str = "layout-all",
+    dataset_path: Optional[str] = None,
+    max_model_len: int = 32768,
+    max_tokens: int = 16384,
     wait: bool = False,
     config_path: Optional[str] = None,
     username: Optional[str] = None,
@@ -170,6 +174,10 @@ def run_ocr_job(
         partition: SLURM partition (default: gpu)
         time_limit: Time limit in HH:MM:SS format (default: 02:00:00)
         env: Conda environment name (overrides config.yaml)
+        prompt_mode: DoTS.ocr prompt mode (ocr, layout-all, layout-only; default: layout-all)
+        dataset_path: Path to existing dataset on cluster (skips data upload if provided)
+        max_model_len: Maximum model context length (default: 32768)
+        max_tokens: Maximum output tokens (default: 16384)
         wait: Whether to wait for job completion
         config_path: Path to config.yaml file
         username: Username for SSH connection
@@ -192,7 +200,7 @@ def run_ocr_job(
         >>> status = job.get_status()
         >>> print(status)
     """
-    logger.info(f"[RUN_OCR_JOB CALLED] job_name={job_name}, source={data_source}")
+    logger.info(f"[RUN_OCR_JOB CALLED] job_name={job_name}, source={data_source}, prompt_mode={prompt_mode}")
     
     # Create OCR script using file:// URLs (more efficient than base64)
     ocr_script = f"""
@@ -208,6 +216,27 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# DoTS.ocr Prompt Templates
+PROMPT_TEMPLATES = {{
+    "ocr": "Extract the text content from this image.",
+    "layout-all": '''Please output the layout information from the PDF image, including each layout element's bbox, its category, and the corresponding text content within the bbox.
+1. Bbox format: [x1, y1, x2, y2]
+2. Layout Categories: The possible categories are ['Caption', 'Footnote', 'Formula', 'List-item', 'Page-footer', 'Page-header', 'Picture', 'Section-header', 'Table', 'Text', 'Title'].
+3. Text Extraction & Formatting Rules:
+    - Picture: For the 'Picture' category, the text field should be omitted.
+    - Formula: Format its text as LaTeX.
+    - Table: Format its text as HTML.
+    - All Others (Text, Title, etc.): Format their text as Markdown.
+4. Constraints:
+    - The output text must be the original text from the image, with no translation.
+    - All layout elements must be sorted according to human reading order.
+5. Final Output: The entire output must be a single JSON object.''',
+    "layout-only": '''Please output the layout information from this PDF image, including each layout's bbox and its category. The bbox should be in the format [x1, y1, x2, y2]. The layout categories for the PDF document include ['Caption', 'Footnote', 'Formula', 'List-item', 'Page-footer', 'Page-header', 'Picture', 'Section-header', 'Table', 'Text', 'Title']. Do not output the corresponding text. The layout result should be in JSON format.''',
+}}
+
+# Select prompt based on mode
+PROMPT = PROMPT_TEMPLATES["{prompt_mode}"]
 
 
 def save_image_to_temp(image, temp_dir):
@@ -235,7 +264,7 @@ def save_image_to_temp(image, temp_dir):
     return f"file://{{temp_file.name}}", temp_file.name
 
 
-def make_ocr_message(image_url, prompt="Extract the text content from this image."):
+def make_ocr_message(image_url, prompt=PROMPT):
     \"\"\"Create vLLM chat message with file:// URL.\"\"\"
     return [
         {{
@@ -255,26 +284,26 @@ logger.info(f"Loaded {{len(dataset)}} samples")
 # Limit samples if requested
 {f'dataset = dataset.select(range(min({max_samples}, len(dataset))))' if max_samples else ''}
 
-# Create temporary directory for image files
-temp_dir = tempfile.mkdtemp(prefix="yale_ocr_")
-logger.info(f"Created temp directory: {{temp_dir}}")
-
 # Get the parent directory of the dataset for allowed_local_media_path
 dataset_parent = os.path.dirname(os.path.abspath("dataset"))
+
+# Create temporary directory for image files WITHIN the allowed path
+temp_dir = tempfile.mkdtemp(prefix="yale_ocr_", dir=dataset_parent)
+logger.info(f"Created temp directory: {{temp_dir}}")
 
 # Initialize vLLM model with allowed_local_media_path
 logger.info("Initializing model: {model}")
 llm = LLM(
     model="{model}",
     trust_remote_code=True,
-    max_model_len=8192,
+    max_model_len={max_model_len},
     gpu_memory_utilization=0.8,
     allowed_local_media_path=dataset_parent,  # Allow loading from dataset directory
 )
 
 sampling_params = SamplingParams(
     temperature=0.0,
-    max_tokens=8192,
+    max_tokens={max_tokens},
 )
 
 # Process images
@@ -338,9 +367,19 @@ dataset.save_to_disk(output_path)
 logger.info("✅ OCR processing complete!")
 """
     
+    # If dataset_path is provided, skip data upload and use the existing path
+    if dataset_path:
+        logger.info(f"Using existing dataset at: {dataset_path}")
+        # Replace "dataset" placeholder with the actual path in the script
+        ocr_script = ocr_script.replace('load_from_disk("dataset")', f'load_from_disk("{dataset_path}")')
+        # Set data_source to None to skip upload
+        actual_data_source = None
+    else:
+        actual_data_source = data_source
+    
     return run_job(
         script=ocr_script,
-        data_source=data_source,
+        data_source=actual_data_source,
         source_type=source_type,
         job_name=job_name,
         gpus=gpus,

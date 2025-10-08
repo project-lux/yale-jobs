@@ -52,6 +52,10 @@ def cmd_ocr(args):
         partition=args.partition,
         time_limit=args.time,
         env=args.env,
+        prompt_mode=args.prompt_mode,
+        dataset_path=args.dataset_path,
+        max_model_len=args.max_model_len,
+        max_tokens=args.max_tokens,
         wait=args.wait,
         config_path=args.config,
     )
@@ -191,6 +195,14 @@ Examples:
     ocr_parser.add_argument('--partition', default='gpu', help='SLURM partition (default: gpu)')
     ocr_parser.add_argument('--time', default='02:00:00', help='Time limit (HH:MM:SS, default: 02:00:00)')
     ocr_parser.add_argument('--env', help='Conda environment name (overrides config.yaml)')
+    ocr_parser.add_argument('--prompt-mode', default='layout-all',
+                           choices=['ocr', 'layout-all', 'layout-only'],
+                           help='DoTS.ocr prompt mode (default: layout-all)')
+    ocr_parser.add_argument('--dataset-path', help='Path to existing dataset on cluster (skips data upload)')
+    ocr_parser.add_argument('--max-model-len', type=int, default=32768,
+                           help='Maximum model context length (default: 32768)')
+    ocr_parser.add_argument('--max-tokens', type=int, default=16384,
+                           help='Maximum output tokens (default: 16384)')
     ocr_parser.add_argument('--wait', action='store_true', help='Wait for completion')
     ocr_parser.set_defaults(func=cmd_ocr)
     

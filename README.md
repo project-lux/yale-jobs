@@ -257,6 +257,13 @@ yale jobs ocr <source> <output> [options]
   --batch-size N                   # Default: 16
   --max-samples N                  # Limit samples
   --gpus GPU_SPEC                  # Default: p100:2
+  --partition PARTITION            # SLURM partition (default: gpu)
+  --time HH:MM:SS                  # Time limit (default: 02:00:00)
+  --env ENV_NAME                   # Conda environment (overrides config.yaml)
+  --prompt-mode {ocr,layout-all,layout-only}  # DoTS.ocr mode (default: layout-all)
+  --dataset-path PATH              # Use existing dataset on cluster (skips upload)
+  --max-model-len N                # Maximum model context length (default: 32768)
+  --max-tokens N                   # Maximum output tokens (default: 16384)
   --wait                           # Wait for completion
 
 # Check status
@@ -294,6 +301,55 @@ Yale Jobs handles the complete workflow:
 7. **Results** - Downloads results when complete
 
 ## Examples
+
+### Basic OCR with Different Prompt Modes
+
+```bash
+# Simple text extraction (ocr mode)
+yale jobs ocr manuscript.pdf text-output \
+    --source-type pdf \
+    --prompt-mode ocr
+
+# Full layout analysis with bounding boxes (layout-all - default)
+# Note: layout-all uses a longer prompt, increase context if needed
+yale jobs ocr documents/ layout-output \
+    --source-type pdf \
+    --prompt-mode layout-all \
+    --gpus h200:1 \
+    --partition gpu_h200 \
+    --max-model-len 32768
+
+# Layout structure only (no text content)
+yale jobs ocr scans.pdf layout-only-output \
+    --source-type pdf \
+    --prompt-mode layout-only
+```
+
+**Note on Context Length:**
+- **Simple OCR mode**: Default 32768 is usually enough
+- **Layout-all mode**: May need 32768+ for complex/large images (default)
+- **Error "decoder prompt too long"**: Increase `--max-model-len` (e.g., 49152 or 65536)
+- DoTS.ocr supports up to ~128K tokens depending on available GPU memory
+
+### Reusing Existing Datasets
+
+Skip data upload when rerunning OCR on an existing dataset:
+
+```bash
+# First run - uploads data
+yale jobs ocr manuscript.pdf first-output \
+    --source-type pdf \
+    --prompt-mode ocr \
+    --job-name ocr-run-1
+
+# Second run - reuse the uploaded dataset with different prompt
+yale jobs ocr dummy.pdf second-output \
+    --dataset-path /path/to/cluster/first-output_data \
+    --prompt-mode layout-all \
+    --job-name ocr-run-2
+```
+
+### More Examples
 
 See the `examples/` directory for more:
 - `simple_ocr.py` - Basic OCR usage
