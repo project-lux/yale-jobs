@@ -49,6 +49,7 @@ def cmd_ocr(args):
         job_name=args.job_name,
         gpus=args.gpus,
         partition=args.partition,
+        time_limit=args.time,
         wait=args.wait,
         config_path=args.config,
     )
@@ -185,6 +186,7 @@ Examples:
     ocr_parser.add_argument('--job-name', default='yale-ocr', help='Job name')
     ocr_parser.add_argument('--gpus', default='p100:2', help='GPU specification')
     ocr_parser.add_argument('--partition', default='gpu', help='SLURM partition (default: gpu)')
+    ocr_parser.add_argument('--time', default='02:00:00', help='Time limit (HH:MM:SS, default: 02:00:00)')
     ocr_parser.add_argument('--wait', action='store_true', help='Wait for completion')
     ocr_parser.set_defaults(func=cmd_ocr)
     

@@ -84,9 +84,19 @@ def run_job(
             # Replace placeholder with actual path
             script = script.replace('load_from_disk("dataset")', f'load_from_disk("{dataset_path}")')
         
-        # Create SLURM batch script
+        # Save Python script to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script)
+            local_python_script = f.name
+        
+        # Upload Python script to cluster
+        remote_python_script = f"{job.job_dir}/{job_name}.py"
+        connection.upload_file(local_python_script, remote_python_script)
+        
+        # Create SLURM batch script that calls the Python script
+        bash_command = f"python {remote_python_script}"
         sbatch_content = job.create_sbatch_script(
-            script_content=script,
+            script_content=bash_command,
             cpus_per_task=cpus_per_task,
             gpus=gpus,
             partition=partition,
@@ -97,14 +107,14 @@ def run_job(
         # Save batch script to temporary file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
             f.write(sbatch_content)
-            local_script_path = f.name
+            local_sbatch_script = f.name
         
-        # Upload script to cluster
-        remote_script_path = f"{job.job_dir}/{job_name}.sh"
-        connection.upload_file(local_script_path, remote_script_path)
+        # Upload batch script to cluster
+        remote_sbatch_script = f"{job.job_dir}/{job_name}.sh"
+        connection.upload_file(local_sbatch_script, remote_sbatch_script)
         
         # Submit job
-        job.submit(remote_script_path, wait=wait)
+        job.submit(remote_sbatch_script, wait=wait)
         
         return job
         
@@ -123,6 +133,7 @@ def run_ocr_job(
     job_name: str = "yale-ocr",
     gpus: str = "p100:2",
     partition: str = "gpu",
+    time_limit: str = "02:00:00",
     wait: bool = False,
     config_path: Optional[str] = None,
     username: Optional[str] = None,
@@ -142,6 +153,7 @@ def run_ocr_job(
         job_name: Name for the job
         gpus: GPU specification
         partition: SLURM partition (default: gpu)
+        time_limit: Time limit in HH:MM:SS format (default: 02:00:00)
         wait: Whether to wait for job completion
         config_path: Path to config.yaml file
         username: Username for SSH connection
@@ -237,7 +249,7 @@ logger.info(f"Results saved to {{output_path}}")
         job_name=job_name,
         gpus=gpus,
         partition=partition,
-        time_limit="02:00:00",
+        time_limit=time_limit,
         wait=wait,
         config_path=config_path,
         username=username,
@@ -299,18 +311,27 @@ class YaleJobs:
             if "load_from_disk" in script:
                 script = script.replace('load_from_disk("dataset")', f'load_from_disk("{dataset_path}")')
         
-        # Create and upload batch script
-        sbatch_content = job.create_sbatch_script(script, **kwargs)
+        # Save Python script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script)
+            local_python_script = f.name
+        
+        remote_python_script = f"{job.job_dir}/{job_name}.py"
+        self.connection.upload_file(local_python_script, remote_python_script)
+        
+        # Create and upload batch script that calls Python script
+        bash_command = f"python {remote_python_script}"
+        sbatch_content = job.create_sbatch_script(bash_command, **kwargs)
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
             f.write(sbatch_content)
-            local_script_path = f.name
+            local_sbatch_script = f.name
         
-        remote_script_path = f"{job.job_dir}/{job_name}.sh"
-        self.connection.upload_file(local_script_path, remote_script_path)
+        remote_sbatch_script = f"{job.job_dir}/{job_name}.sh"
+        self.connection.upload_file(local_sbatch_script, remote_sbatch_script)
         
         # Submit job
-        job.submit(remote_script_path)
+        job.submit(remote_sbatch_script)
         
         return job
     
