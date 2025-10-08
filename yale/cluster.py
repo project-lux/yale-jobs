@@ -237,16 +237,15 @@ class ClusterConnection:
         if not self.ssh_client:
             raise ConnectionError("Not connected to cluster. Call connect() first.")
         
-        logger.debug(f"Executing: {command}")
-        
-        stdin, stdout, stderr = self.ssh_client.exec_command(command, timeout=timeout)
-        
-        # Get conda environment if specified
+        # Get conda environment if specified and prepend it BEFORE executing
         env = self.config.get('env')
         if env and 'conda activate' not in command:
             # Prepend conda activation
-            full_command = f"source ~/.bashrc && conda activate {env} && {command}"
-            stdin, stdout, stderr = self.ssh_client.exec_command(full_command, timeout=timeout)
+            command = f"source ~/.bashrc && conda activate {env} && {command}"
+        
+        logger.debug(f"Executing: {command}")
+        
+        stdin, stdout, stderr = self.ssh_client.exec_command(command, timeout=timeout)
         
         stdout_str = stdout.read().decode()
         stderr_str = stderr.read().decode()
